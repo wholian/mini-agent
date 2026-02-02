@@ -8,6 +8,7 @@ from pathlib import Path
 import json
 import re
 
+from .skill_loader import SkillLoader
 from .tools import apply_edit, eval_math_expr, execute_tool, preview_edit, tool_specs
 
 from .openrouter_client import call_model
@@ -79,6 +80,8 @@ def _parse_inline_tool_call(content: object) -> tuple[str, dict] | None:
 
 def main() -> None:
     config = load_config()
+    skill_loader = SkillLoader("skills")
+    loaded_skills = skill_loader.discover_skills()
     system_message = {
         "role": "system",
         "content": (
@@ -89,7 +92,25 @@ def main() -> None:
             "Before editing a file, you must read it. After editing, read it again to verify changes."
         ),
     }
+    metadata_prompt = skill_loader.get_skills_metadata_prompt()
+    if metadata_prompt:
+        system_message["content"] = f"{system_message['content']}\n\n{metadata_prompt}"
     history: list[dict[str, str]] = []
+    get_skill_tool = {
+        "type": "function",
+        "function": {
+            "name": "get_skill",
+            "description": "Load full content for a specific skill by skill name.",
+            "parameters": {
+                "type": "object",
+                "properties": {"skill_name": {"type": "string"}},
+                "required": ["skill_name"],
+            },
+        },
+    }
+
+    def active_tool_specs() -> list[dict]:
+        return [*tool_specs(), get_skill_tool]
 
     initial_prompt = "Say '你好' and nothing else."
     if len(sys.argv) > 1:
@@ -98,11 +119,14 @@ def main() -> None:
     def run_turn(user_text: str) -> None:
         history.append({"role": "user", "content": user_text})
         if os.getenv("DEBUG", "").lower() in {"1", "true", "yes"}:
+            print("DEBUG loaded_skills:", [s.name for s in loaded_skills])
+            if metadata_prompt:
+                print("DEBUG skills_metadata_prompt:", metadata_prompt)
             print(
                 "DEBUG new_messages:",
                 [system_message, {"role": "user", "content": user_text}],
             )
-            print("DEBUG tools:", tool_specs())
+            print("DEBUG tools:", active_tool_specs())
 
         max_tool_rounds = 15
         rounds = 0
@@ -112,7 +136,7 @@ def main() -> None:
                 base_url=config["base_url"],
                 model=config["model"],
                 messages=[system_message, *history],
-                tools=tool_specs(),
+                tools=active_tool_specs(),
             )
             choice = response_json["choices"][0]["message"]
             tool_calls = choice.get("tool_calls") or []
@@ -123,7 +147,14 @@ def main() -> None:
                 for call in tool_calls:
                     name = call["function"]["name"]
                     args = json.loads(call["function"]["arguments"] or "{}")
-                    if name == "edit_file":
+                    if name == "get_skill":
+                        skill_name = str(args.get("skill_name", "")).strip()
+                        skill = skill_loader.get_skill(skill_name)
+                        if not skill:
+                            result = f"error: skill not found: {skill_name}"
+                        else:
+                            result = skill.full_prompt()
+                    elif name == "edit_file":
                         path = str(args.get("path", ""))
                         target = str(args.get("target", ""))
                         replacement = str(args.get("replacement", ""))
@@ -175,18 +206,15 @@ def main() -> None:
                 tool_call = _parse_inline_tool_call(response_content)
             if tool_call:
                 name, args = tool_call
-                result = execute_tool(name, args)
-                if name == "edit_file" and result.startswith("preview:"):
-                    print(result)
-                    confirm = input("Apply this change? (yes/no) ").strip().lower()
-                    if confirm in {"y", "yes"}:
-                        # Re-run the edit to apply by replacing preview with actual write
-                        # The execute_tool for edit_file returns preview only; apply via write_file.
-                        preview_lines = result.splitlines()
-                        if preview_lines:
-                            pass
+                if name == "get_skill":
+                    skill_name = str(args.get("skill_name", "")).strip()
+                    skill = skill_loader.get_skill(skill_name)
+                    if not skill:
+                        result = f"error: skill not found: {skill_name}"
                     else:
-                        result = "canceled"
+                        result = skill.full_prompt()
+                else:
+                    result = execute_tool(name, args)
                 print(result)
                 history.append({"role": "assistant", "content": response_content})
                 history.append({"role": "tool", "content": result})

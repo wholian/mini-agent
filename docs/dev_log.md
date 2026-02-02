@@ -190,3 +190,30 @@
 - 目标：允许模型在项目根目录执行命令并返回 stdout/stderr。
 - 改动：`src/tools.py` 新增 `run_shell` 工具与执行逻辑（超时 30 秒）。
 - 验证：待运行（示例：`ls` 或 `git status`）。
+
+### 步骤 37：定义 Skill 数据结构
+- 目标：先建立 Skill 的统一数据模型，为后续加载与注入做准备。
+- 改动：新增 `src/skills.py`，定义 `Skill`（name/description/content/skill_path）以及 `metadata_line()`、`full_prompt()`。
+- 验证：待运行（本步为结构定义）。
+
+### 步骤 38：实现 SkillLoader 扫描与加载
+- 目标：支持从 `skills/**/SKILL.md` 扫描并加载 skill。
+- 改动：新增 `src/skill_loader.py`，实现 `load_skill()`、`discover_skills()`、`get_skill()`，并解析最小 frontmatter（`name`/`description`）。
+- 验证：待运行（下步会配合示例 skill 一起验证）。
+
+### 步骤 39：生成并注入 Skills 元数据提示
+- 目标：实现 Progressive Disclosure Level 1（仅注入 skill 元数据）。
+- 改动：`src/skill_loader.py` 新增 `get_skills_metadata_prompt()`；新增示例 skill `skills/demo-skill/SKILL.md`；`src/main.py` 启动时加载 skills 并把 metadata 拼入 system prompt。
+- 验证：待运行（`DEBUG=1` 可看到 `loaded_skills` 与 `skills_metadata_prompt`）。
+- 验证：`DEBUG=1 python3 -m src.main "你好"` 成功加载 `demo-skill` 元数据并正常完成模型对话。
+
+### 步骤 40：新增 get_skill 工具（按需加载完整技能）
+- 目标：实现 Progressive Disclosure Level 2，让模型可按需读取 skill 全文。
+- 改动：`src/main.py` 新增 `get_skill` 工具定义并加入可用工具列表；在 tool 执行分支中处理 `get_skill(skill_name)`，返回 `skill.full_prompt()`。
+- 验证：待运行（示例：让模型调用 `get_skill` 读取 `demo-skill`）。
+
+### 步骤 41：强化 demo-skill 约束用于验证
+- 目标：让 skill 生效结果更可观察。
+- 改动：更新 `skills/demo-skill/SKILL.md`，增加强约束（中文、前缀“【技能】”、短长度、无标点）。
+- 验证：待运行（请求模型加载 demo-skill 并回复）。
+- 验证：`DEBUG=1 python3 -m src.main "请加载 demo-skill 并回复一句问候语"` 成功触发 `get_skill` 且输出满足约束（如“【技能】你好世界”）。
